@@ -1,7 +1,7 @@
 """
 A tiny LangGraph app: a support-ticket router.
 
-Flow:  START -> classify -> (billing | tech | general) -> review --(retry?)--> END
+Flow:  START -> classify -> (billing | tech | shipping | general) -> review --(retry?)--> END
                                                             |
                                                             +--> back to the agent (a cycle)
 
@@ -60,6 +60,8 @@ def classify(state: State) -> dict:
         cat = "billing"
     elif any(w in q for w in ("error", "crash", "bug", "login")):
         cat = "tech"
+    elif any(w in q for w in ("delivery", "package", "shipping", "tracking")):
+        cat = "shipping"
     else:
         cat = "general"
     return {"category": cat, "attempts": 0, "log": [f"classify -> {cat}"]}
@@ -82,6 +84,13 @@ def tech_agent(state: State) -> dict:
             "log": [f"tech_agent attempt {state['attempts'] + 1}"]}
 
 
+def shipping_agent(state: State) -> dict:
+    ans = ask_claude("shipping", state["question"],
+                     "Your package is on its way; here's your tracking link.")
+    return {"answer": ans,
+            "attempts": state["attempts"] + 1, "log": ["shipping_agent answered"]}
+
+
 def general_agent(state: State) -> dict:
     ans = ask_claude("general", state["question"], "Thanks for reaching out! A human will follow up.")
     return {"answer": ans,
@@ -93,7 +102,7 @@ def review(state: State) -> dict:
 
 
 # 3. ROUTING FUNCTIONS (used by conditional edges) ------------------------
-def route_by_category(state: State) -> Literal["billing", "tech", "general"]:
+def route_by_category(state: State) -> Literal["billing", "tech", "shipping", "general"]:
     return state["category"]
 
 
@@ -107,12 +116,13 @@ builder = StateGraph(State)
 builder.add_node("classify", classify)
 builder.add_node("billing", billing_agent)
 builder.add_node("tech", tech_agent)
+builder.add_node("shipping", shipping_agent)
 builder.add_node("general", general_agent)
 builder.add_node("review", review)
 
 builder.add_edge(START, "classify")
 builder.add_conditional_edges("classify", route_by_category)  # return value = next node
-for agent in ("billing", "tech", "general"):
+for agent in ("billing", "tech", "shipping", "general"):
     builder.add_edge(agent, "review")
 builder.add_conditional_edges("review", good_enough, {"retry": "tech", "done": END})
 
@@ -127,6 +137,7 @@ if __name__ == "__main__":
     questions = [
         "I was charged twice, can I get a refund?",
         "The app shows an error on login",
+        "Where is my package? The delivery is late.",
         "What are your opening hours?",
     ]
     for i, q in enumerate(questions):
